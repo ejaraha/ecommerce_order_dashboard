@@ -1,0 +1,251 @@
+
+########################
+PRODUCT DETAILS
+########################
+
+CREATE OR REPLACE VIEW wpdatatables_product_details AS 
+SELECT 
+		product_names.product_name, 
+        CASE # when color names include details, display only the product name
+            WHEN b.meta_value LIKE 'small%' THEN TRIM(LOWER(SUBSTRING(b.meta_value FROM 7)))
+            WHEN b.meta_value LIKE 'medium%' THEN TRIM(LOWER(SUBSTRING(b.meta_value FROM 8)))
+            WHEN b.meta_value LIKE 'large%' THEN TRIM(LOWER(SUBSTRING(b.meta_value FROM 7)))
+            WHEN b.meta_value LIKE '%small' THEN TRIM(LOWER(LEFT(b.meta_value, LENGTH(b.meta_value)-6)))
+            WHEN b.meta_value LIKE '%medium' THEN TRIM(LOWER(LEFT(b.meta_value, LENGTH(b.meta_value)-7)))
+            WHEN b.meta_value LIKE '%large' THEN TRIM(LOWER(LEFT(b.meta_value, LENGTH(b.meta_value)-6)))
+            WHEN b.meta_value LIKE '%on cone' THEN TRIM(LOWER(LEFT(b.meta_value, LENGTH(b.meta_value)-8)))
+            WHEN b.meta_value LIKE '%cone' THEN TRIM(LOWER(LEFT(b.meta_value, LENGTH(b.meta_value)-5)))
+            WHEN b.meta_value LIKE '%skein' THEN TRIM(LOWER(LEFT(b.meta_value, LENGTH(b.meta_value)-6)))
+            WHEN b.meta_value LIKE '%1700 ypp' THEN TRIM(LOWER(LEFT(b.meta_value, LENGTH(b.meta_value)-9)))
+            WHEN b.meta_value LIKE '%1300 ypp' THEN TRIM(LOWER(LEFT(b.meta_value, LENGTH(b.meta_value)-9)))
+            WHEN b.meta_value LIKE '%3 oz.' THEN TRIM(LOWER(LEFT(b.meta_value, LENGTH(b.meta_value)-6)))
+            WHEN b.meta_value LIKE '%6 oz.' THEN TRIM(LOWER(LEFT(b.meta_value, LENGTH(b.meta_value)-6)))
+            WHEN b.meta_value LIKE 'macrame%' THEN TRIM(LOWER(SUBSTRING(b.meta_value FROM 9)))
+            WHEN b.meta_value LIKE 'thick and thin%' THEN TRIM(LOWER(SUBSTRING(b.meta_value FROM 16)))
+        	WHEN b.meta_value LIKE '%&amp;%' THEN TRIM(LOWER(REPLACE(b.meta_value, '&amp;', '+')))
+        	WHEN b.meta_value LIKE '%lady%' THEN 'lady\'s mantle'
+        	WHEN b.meta_value LIKE '%brown gal%' THEN 'brown galingale'
+            ELSE TRIM(IFNULL(LOWER(b.meta_value), 'na'))
+        END as color,
+            CASE # color names include details, put the detail in the detail column
+            WHEN b.meta_value LIKE '%small%' THEN 'small'
+            WHEN b.meta_value LIKE '%medium%' THEN 'medium'
+            WHEN b.meta_value LIKE '%large%' THEN 'large'
+            WHEN b.meta_value LIKE '%on cone' THEN 'cone'
+            WHEN b.meta_value LIKE '%cone' THEN 'cone'
+            WHEN b.meta_value LIKE '%skein' THEN 'skein'
+            WHEN b.meta_value LIKE 'macrame%' THEN 'macrame'
+            WHEN b.meta_value LIKE 'thick and thin%' THEN 'thick and thin'
+            WHEN b.meta_value LIKE '%1700 ypp' THEN '1700 ypp'
+            WHEN b.meta_value LIKE '%1300 ypp' THEN '1300 ypp'
+            WHEN b.meta_value LIKE '%3 oz.' THEN '3 oz.'
+            WHEN b.meta_value LIKE '%6 oz.' THEN '6 oz.'
+            ELSE IFNULL(LOWER(d.meta_value), 'na')
+        END as detail,
+        COUNT(a.order_id) as orders
+### OUT OF SORTING MEMORY
+#		YEAR(MAX(e.date_created)) - YEAR(MIN(e.date_created)) as years_active,
+#		MIN(e.date_created) as date_first_ordered,
+#    	MAX(e.date_created) as date_last_ordered
+    FROM wp_woocommerce_order_items a 
+    LEFT JOIN wp_woocommerce_order_itemmeta b 
+        ON a.order_item_id = b.order_item_id
+        AND b.meta_key LIKE 'Color%'
+    #LEFT JOIN wp_wc_order_stats c 
+    #    ON a.order_id = c.order_id
+    LEFT JOIN wp_woocommerce_order_itemmeta d    
+        ON a.order_item_id = d.order_item_id
+        AND d.meta_key IN ('yarn_type', 'style', 'styles', 'weight', 'put-up', 'components', 'seeds')
+    LEFT JOIN wp_wc_order_product_lookup e 
+        ON a.order_item_id = e.order_item_id
+	LEFT JOIN #STANDARDIZE PRODUCT NAMES
+        (
+        SELECT 
+            e.product_id,
+            TRIM(LOWER(REPLACE(SUBSTRING_INDEX(a.order_item_name, '-', 1),' |',''))) as product_name,
+            max_date.max_date_created
+        FROM wp_woocommerce_order_items a 
+        LEFT JOIN wp_wc_order_product_lookup e  
+            ON a.order_item_id = e.order_item_id
+        LEFT JOIN	#join on the max_date_created for each product_id
+            (
+            SELECT MAX(product_id) as product_id, MAX(date_created) as max_date_created
+            FROM wp_wc_order_product_lookup 
+            GROUP BY product_id
+            ) max_date
+            ON max_date.max_date_created = e.date_created
+            AND max_date.product_id = e.product_id
+        WHERE max_date.max_date_created IS NOT NULL #eliminate rows where the max_date_created is NULL, leaving only the latest product names
+        GROUP BY e.product_id
+        ) product_names    
+	ON product_names.product_id = e.product_id    
+	WHERE e.product_id IS NOT NULL 
+    GROUP BY product_names.product_name, color, detail
+
+__________________________________________________________________________________________________________________________________
+
+
+########################
+CUSTOMER ORDER HISTORY
+########################
+
+CREATE OR REPLACE VIEW wpdatatables_customer_order_history AS	
+
+ SELECT
+        b.order_id,
+        product_names.product_name,
+        SUM(b.product_qty) as product_qty,
+        CASE	
+        	WHEN c.first_name = 'sonculp' THEN 'son culp' # son culp entered first and last name in the first name box for some orders
+    		WHEN c.email = 'jakettler@hotmail.com' THEN 'jill kettler' # jill kettler did not enter her name for some orders
+    		WHEN TRIM(LENGTH(CONCAT(c.first_name, c.last_name))) < 1 THEN IFNULL(c.email, 'na')# one record for lioubov.ermolova@gmail.com has '' as first and last name (not null, but length = 0)
+        	ELSE TRIM(LOWER(CONCAT(c.first_name, ' ', c.last_name))) 
+        END as customer_name,        
+        b.date_created,
+        c.email,
+        c.state
+    FROM wp_wc_order_product_lookup b  
+    LEFT JOIN wp_wc_customer_lookup c 
+    ON b.customer_id = c.customer_id
+	LEFT JOIN #STANDARDIZE PRODUCT NAMES
+        (
+        SELECT 
+            b.product_id,
+            TRIM(LOWER(REPLACE(REPLACE(REPLACE(SUBSTRING_INDEX(a.order_item_name, '-', 1),' |',''), ')',''),'(',''))) as product_name,
+            max_date.max_date_created
+        FROM wp_woocommerce_order_items a 
+        LEFT JOIN wp_wc_order_product_lookup b  
+            ON a.order_item_id = b.order_item_id
+        LEFT JOIN	#join on the max_date_created for each product_id
+            (
+            SELECT MAX(product_id) as product_id, MAX(date_created) as max_date_created
+            FROM wp_wc_order_product_lookup 
+            GROUP BY product_id
+            ) max_date
+            ON max_date.max_date_created = b.date_created
+            AND max_date.product_id = b.product_id
+        WHERE max_date.max_date_created IS NOT NULL #eliminate rows where the max_date_created is NULL, leaving only the latest product names
+        AND b.product_id IS NOT NULL
+        GROUP BY b.product_id
+        ) product_names    
+	ON product_names.product_id = b.product_id
+    WHERE b.date_created >= DATE_SUB(NOW(),INTERVAL 1 YEAR) #limitation due to wpdatatables processing capacity for front end filtering
+    AND product_qty >= 0
+    GROUP BY b.order_id, product_names.product_name
+
+__________________________________________________________________________________________________________________________________
+
+
+
+
+########################
+CUSTOMER DETAILS
+########################
+
+CREATE OR REPLACE VIEW wpdatatables_customer_details AS
+
+SELECT 
+	mid.customer_name,
+    mid.orders_placed,
+    mid.products_purchased,
+    mid.net_revenue,
+    YEAR(mid.date_last_active) - YEAR(mid.date_first_active) as years_active,    
+    mid.date_last_active,
+    mid.date_first_active,    
+	mid.email,
+    mid.state
+FROM
+    (
+    SELECT 
+        core.customer_name,
+        core.email,
+        MAX(core.date_created) as date_last_active,
+        IFNULL(MIN(core.date_created), MIN(core.date_registered)) as date_first_active,
+        CASE	
+            WHEN core.state = 'alabama' THEN 'AL'
+            WHEN core.state = 'texas' THEN 'TX'
+            WHEN core.state = 'california' THEN 'CA'
+            WHEN core.state = 'ohio' THEN 'OH'
+            WHEN core.state = 'michigan' THEN 'MI'
+            WHEN core.state = 'ma.' THEN 'MA'
+            WHEN core.state = 'illinois' THEN 'IL'
+            WHEN core.state = 'kentucky' THEN 'KY'
+            WHEN core.state = 'wisconsin' THEN 'WI'
+            WHEN core.state = 'colorado' THEN 'CO'
+            WHEN core.state = 'new york' THEN 'NY'
+            WHEN core.state = 'pennsylvania' THEN 'PA'
+            WHEN core.state = 'florida' THEN 'FL'
+            WHEN core.state = 'montana' THEN 'MT'
+            WHEN core.state = 'washington' THEN 'WA'
+            WHEN core.state = 'arkansas' THEN 'AR'
+            WHEN core.state = 'georgia' THEN 'GA'
+            WHEN core.state = 'new hampshire' THEN 'NH'
+            WHEN core.state = 'virginia' THEN 'VA'
+            WHEN core.state = 'north carolina' THEN 'NC'
+            WHEN core.state = 'ca.' THEN 'CA'
+            WHEN core.state = 'alaska' THEN 'AK'
+            WHEN core.state = 'minnesota' THEN 'MN'
+            WHEN core.state = 'maryland' THEN 'MD'
+            WHEN core.state = 'indiana' THEN 'IN'
+            WHEN core.state = 'new jersey' THEN 'NJ'
+            WHEN core.state = 'oregon' THEN 'OR'
+            WHEN core.state = 'missouri' THEN 'MO'
+            WHEN core.state = 'tennessee' THEN 'TN'
+            WHEN core.state = 'north dakota' THEN 'ND'
+            WHEN core.state = 'louisiana' THEN 'LA'
+            WHEN core.state = 'kansas' THEN 'KS'
+            WHEN core.state = 'new mexico' THEN 'NM'
+            WHEN core.state = 'vermont' THEN 'VT'
+            WHEN core.state = 'n.d.' THEN 'ND'     
+            WHEN core.state = 'idaho' THEN 'ID'
+            WHEN core.state = 'oklahoma' THEN 'OK'     
+            WHEN core.state = 'nebraska' THEN 'NE'
+            WHEN core.state = 'ill' THEN 'IL'     
+            WHEN core.state = 'utah' THEN 'UT'
+            WHEN core.state = 'iowa' THEN 'IA'   
+            WHEN core.state = 'west virginia' THEN 'WV'   
+            WHEN core.state = 'ca california' THEN 'CA'   
+            WHEN core.state = 'massachusetts' THEN 'MA'   
+            WHEN core.state = 'maine' THEN 'ME'   
+            WHEN core.state = 'south carolina' THEN 'SC'   
+            WHEN core.state = 'puerto rico' THEN 'PR'   
+            WHEN core.state = 'arizona' THEN 'AZ'
+            WHEN core.state = 'al,' THEN 'AL'
+            WHEN core.state = 'sd - south dakota' THEN 'SD'
+            WHEN core.state = 'delaware' THEN 'DE'
+            WHEN core.state = 'connecticut' THEN 'CT'
+            WHEN core.state = 'mo.' THEN 'MO'
+            WHEN core.state = 'n.c' THEN 'NC'
+            WHEN core.state = 'wyoming' THEN 'WY'
+            ELSE UPPER(core.state) 
+        END as state,
+        COUNT(DISTINCT core.order_id) as orders_placed,
+        SUM(core.product_qty) as products_purchased,
+        CAST(SUM(core.product_net_revenue) AS DECIMAL(10,2)) as net_revenue
+    FROM     
+        (
+        SELECT a.customer_id,
+            CASE	
+            	WHEN a.first_name = 'sonculp' THEN 'son culp'
+            	ELSE TRIM(LOWER(CONCAT(a.first_name, ' ', a.last_name)))
+            END as customer_name,
+            LOWER(a.email) as email,
+            a.date_last_active, 
+            a.date_registered,
+            LOWER(a.state) as state,
+            b.order_id,
+            b.date_created,
+            b.product_qty,
+            b.product_net_revenue
+        FROM wp_wc_customer_lookup a 
+        LEFT JOIN wp_wc_order_product_lookup b 
+        ON a.customer_id = b.customer_id
+        WHERE b.product_qty IS NOT NULL #some customer_ids are active 2020, registered 2015, orders 0
+        ) core 				#join order data to customer data
+    WHERE core.customer_name != ''   
+    GROUP BY core.customer_name		#211 customers have > 1 customer_id ; i think this happens
+        				#when a regiterd customer makes a purchase without signing
+        				#in, or when they forget their sign in info and re-register
+    ) mid 
+
+
